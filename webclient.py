@@ -4,42 +4,59 @@ import json
 
 def main() -> int:
     args = sys.argv[1:]
-    port = int(args[1]) if len(args) > 1 else 80
-    host = args[0]
+    if len(args) < 1:
+        print("Usage: python webclient.py <host> [port] but port is optional")
+        return 1
 
-    payload = {"message": "hello world!"}
-    payload_string = json.dumps(payload)
-    payload_bytes = payload_string.encode("utf-8")
-    payload_length = len(payload_bytes)
+    host = args[0]
+    port = int(args[1]) if len(args) > 1 else 80
+
+    payload = {"message": "hello server!"}
+    payload_bytes = json.dumps(payload).encode("utf-8")
 
     headers = (
-        "GET / HTTP/1.1\r\n"
+        "POST / HTTP/1.1\r\n"
         f"Host: {host}\r\n"
         "Content-Type: application/json\r\n"
-        f"Content-Length: {payload_length}\r\n"
-        "Connection: close\r\n\r\n"
+        f"Content-Length: {len(payload_bytes)}\r\n"
+        "Connection: close\r\n"
+        "\r\n"
     )
-
     header_bytes = headers.encode("ISO-8859-1")
 
     request_bytes = header_bytes + payload_bytes
-
     response_bytes = bytearray()
 
     with socket.socket() as s:
-        s.connect((host, port))
+        try:
+            s.connect((host, port))
+            s.sendall(request_bytes)
 
-        s.sendall(request_bytes)
+            while True:
+                chunk = s.recv(4096)
+                if not chunk:
+                    break
+                response_bytes.extend(chunk)
+        except Exception as e:
+            print(f"Network error: {e}")
+            return 1
 
-        while True:
-            chunk = s.recv(4096)
-            if not chunk:
-                break
-            response_bytes.extend(chunk)
+    if not response_bytes:
+        print("Server closed connection without sending data.")
+        return 1
 
-    response_data = response_bytes.decode("ISO-8859-1")
+    header_part, separator, body_part = response_bytes.partition(b"\r\n\r\n")
 
-    print(response_data)
+    print("--- HEADERS ---")
+    print(header_part.decode("ISO-8859-1"))
+
+    if body_part:
+        print("\n--- BODY ---")
+        try:
+            print(body_part.decode("utf-8"))
+        except UnicodeDecodeError:
+            print("[Warning: Body is not valid UTF-8. Raw bytes below:]")
+            print(body_part)
 
     return 0
 
