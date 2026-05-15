@@ -1,11 +1,13 @@
 import sys
 import socket
-import json
+from pathlib import Path
+
+PUBLIC_DIR = Path("public").resolve()
 
 def handle_client(conn: socket.socket, addr: tuple) -> None:
     try:
+        # read and parse request
         request_bytes = b""
-
         while True:
             chunk = conn.recv(4096)
             if not chunk:
@@ -17,50 +19,72 @@ def handle_client(conn: socket.socket, addr: tuple) -> None:
         if not request_bytes:
             return
 
-        header_bytes, _, body_bytes = request_bytes.partition(b"\r\n\r\n")
+        header_bytes, _, _ = request_bytes.partition(b"\r\n\r\n")
         headers_lines = header_bytes.decode("ISO-8859-1").split("\r\n")
 
         request_line_parts = headers_lines[0].split(" ")
         if len(request_line_parts) < 2:
-            print(f"[{addr}] Malformed request line: {headers_lines[0]}")
             return
 
         request_method = request_line_parts[0]
         request_path = request_line_parts[1]
 
-        content_length = 0
-        for line in headers_lines[1:]:
-            if line.lower().startswith("content-length:"):
-                content_length = int(line.split(":")[1].strip())
-                break
+        print(f"[{addr}] {request_method} {request_path}")
 
-        if content_length > 0:
-            while len(body_bytes) < content_length:
-                chunk = conn.recv(4096)
-                if not chunk:
-                    break
-                body_bytes += chunk
+        status_line = "HTTP/1.1 200 OK"
+        content_type = "text/plain"
+        response_body = b""
 
-        body = body_bytes.decode("utf-8") if body_bytes else "<no body>"
-        print(f"[{addr}] {request_method} {request_path} | Body: {body}")
+        match request_path:
+            case "/":
+                content_type = "text/html"
+                response_body = b"<h1>Welcome to Faliux!</h1>"
 
-        payload = {"message": "hello client!", "path_requested": request_path}
-        payload_bytes = json.dumps(payload).encode("utf-8")
+            case _:
+                # get only the filename
+                clean_path = request_path.lstrip("/")
+
+                # combine the filename with public_dir
+                target_file = (PUBLIC_DIR / clean_path).resolve()
+
+                # check if user is a bad kid
+                if not target_file.is_relative_to(PUBLIC_DIR):
+                    status_line = "HTTP/1.1 403 Forbidden"
+                    response_body = b"403 - Forbidden: Stop trying to hack me!"
+
+                # check if the file exist
+                elif target_file.is_file():
+                    # determine what file extension
+                    if target_file.suffix == ".html":
+                        content_type = "text/html"
+                    elif target_file.suffix == ".css":
+                        content_type = "text/css"
+                    elif target_file.suffix in [".jpg", ".jpeg"]:
+                        content_type = "image/jpeg"
+                    else:
+                        content_type = "text/plain"
+
+                    # read and serve the file
+                    with open(target_file, "rb") as f:
+                        response_body = f.read()
+
+                else:
+                    status_line = "HTTP/1.1 404 Not Found"
+                    response_body = b"404 - File Not Found"
 
         response_header = (
-            "HTTP/1.1 200 OK\r\n"
-            "Content-Type: application/json\r\n"
-            f"Content-Length: {len(payload_bytes)}\r\n"
+            f"{status_line}\r\n"
+            f"Content-Type: {content_type}\r\n"
+            f"Content-Length: {len(response_body)}\r\n"
             "Connection: close\r\n"
             "\r\n"
         ).encode("ISO-8859-1")
 
-        conn.sendall(response_header + payload_bytes)
-        print(f"[{addr}] Served successfully.")
+        conn.sendall(response_header + response_body)
+        print(f"[{addr}] Served {request_path} successfully.")
 
     except Exception as e:
         print(f"[{addr}] Error handling connection: {e}")
-
 
 def main() -> int:
     args = sys.argv[1:]
